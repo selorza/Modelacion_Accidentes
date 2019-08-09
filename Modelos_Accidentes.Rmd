@@ -1,0 +1,2648 @@
+---
+title: "Modelacion para accidentes de tránsito"
+runtime: shiny
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+#Cargamos las Librerias
+
+```{r}
+library(readr)
+library(lattice)
+library (ggplot2)
+library(plotly)
+library(dplyr)
+library(glmnet)
+library(neuralnet)
+```
+
+
+
+
+###Cargamos y visualizamos la data
+```{r}
+data_accidentes<-read.csv("C:/Users/sebastian.elorzav/Desktop/Info SE/Sebas E/U. Nacional/2019-I/3.Analítica Predictiva/Trabajo/BD.csv", ";", header = T, na.strings = "?")
+head(data_accidentes)
+```
+
+###Pasamos a factor la variable mes y la variable semana
+
+```{r}
+data_accidentes$MES<-as.factor(data_accidentes$MES)
+data_accidentes$SEMANA<-as.factor(data_accidentes$SEMANA)
+data_accidentes$FECHA<-as.Date(data_accidentes$FECHA, "%d/%m/%Y")
+head(data_accidentes)
+```
+
+###Creamos un dataframe por cada clase y por Día, Semana y Mes
+
+### CHOQUE
+
+#DIA
+
+```{r}
+choque_dia<-aggregate(VR~CLASE*DIA_NOMBRE*DIA*MES*SEMANA*ANO*FESTIVO*FERIA_FLORES*SEMANA_SANTA, data = data_accidentes, subset = data_accidentes$CLASE == "Choque", FUN = sum)
+head(choque_dia)
+```
+
+#SEMANA
+
+```{r}
+choque_semana<-aggregate(VR~CLASE*SEMANA*ANO*FESTIVO*FERIA_FLORES*SEMANA_SANTA, data = data_accidentes, subset = data_accidentes$CLASE == "Choque", FUN = sum)
+head(choque_semana)
+```
+
+#MES
+
+```{r}
+choque_mes<-aggregate(VR~CLASE*MES*ANO*FESTIVO*FERIA_FLORES*SEMANA_SANTA, data = data_accidentes, subset = data_accidentes$CLASE == "Choque", FUN = sum)
+head(choque_mes)
+```
+
+###Modelamiento
+
+###CHOQUE DIA
+
+#Separamos los datos de accidentes por choques en entrenamiento y validación
+
+```{r}
+datos_tr_choque_dia<-subset(choque_dia,subset=(ANO<"2018"))
+datos_vl_choque_dia<-subset(choque_dia,subset=(ANO>="2018") & (ANO<"2019") )
+head(datos_vl_choque_dia)
+```
+
+#MODELO LINEAL (CHOQUE_DIA)
+ 
+```{r}
+lm_choque_dia<-lm(VR~DIA_NOMBRE + MES + FESTIVO + FERIA_FLORES + SEMANA_SANTA ,data=datos_tr_choque_dia)
+summary(lm_choque_dia)
+```
+
+###Predicción Modelo Lineal
+
+```{r}
+pred_choque_dia<-predict(lm_choque_dia,newdata = datos_vl_choque_dia)
+pred_choque_dia
+```
+
+##Cálculo del MSE para el Modelo Lineal Día
+
+```{r}
+MSE_lm_choque_dia<- (1/nrow(datos_vl_choque_dia))*sum((datos_vl_choque_dia$VR- pred_choque_dia)^2)
+MSE_lm_choque_dia
+```
+
+_____________________________________________________________________________
+
+###Modelo Poisson para Choque
+
+#Ajuste del Modelo Poisson
+
+```{r}
+glm_choque_dia<-glm(VR~DIA_NOMBRE + MES + FESTIVO + FERIA_FLORES + SEMANA_SANTA ,data=datos_tr_choque_dia,family = "poisson")
+summary(glm_choque_dia)
+```
+
+#Realizamos la predicción del modelo con los datos de validación
+
+```{r}
+pred_glm_choque_dia<-predict(glm_choque_dia,newdata = datos_vl_choque_dia)
+pred_glm_choque_dia
+```
+
+#Calculo del Pseudo $R^2$ para el Modelo Poisson:
+
+Obtengamos el (pseudo) $R^2$ para el modelo Poisson:
+```{r}
+
+y0_tr<-mean(datos_tr_choque_dia$VR)
+r0_tr<-datos_tr_choque_dia$VR-y0_tr
+R0_tr<-mean(r0_tr^2)
+y_pred_tr_glm<-predict(glm_choque_dia,type="response")
+r_tr_glm<-datos_tr_choque_dia$VR-y_pred_tr_glm
+R_tr_glm<-mean(r_tr_glm^2)
+R2_tr_glm<-1-R_tr_glm/R0_tr
+```
+
+#Veamos el resultado:
+```{r}
+print(R2_tr_glm)
+```
+
+
+##Cálculo del MSE para el Modelo Poisson Día
+
+
+```{r}
+MSE_glm_choque_dia<- (1/nrow(datos_vl_choque_dia))*sum((datos_vl_choque_dia$VR- pred_glm_choque_dia)^2)
+MSE_glm_choque_dia
+```
+
+_____________________________________________________________________________
+
+###Modelo Lasso para Choque
+
+#Entrenamiento
+
+
+```{r}
+  xtrain<-model.matrix(VR ~ DIA_NOMBRE + MES + FESTIVO + FERIA_FLORES + 
+    SEMANA_SANTA,datos_tr_choque_dia)[,-4]
+  ytrain<-datos_tr_choque_dia$VR
+  lasso_choque_dia<-glmnet(xtrain,
+                    ytrain,
+                    standardize = FALSE,
+                    alpha=1,
+                    family = "poisson"
+                    )
+lasso_choque_dia
+```
+
+#Validación
+```{r}
+ x_val_choque_dia<-model.matrix(VR ~ DIA_NOMBRE + MES + FESTIVO + FERIA_FLORES + SEMANA_SANTA,datos_vl_choque_dia)[,-4]
+  choque_vl_dia<-lasso_choque_dia %>% predict(newx = x_val_choque_dia,s=0,type="response")
+  choque_vl_dia<-as.vector(choque_vl_dia)
+  datos_vl_choque_dia<-mutate(datos_vl_choque_dia,choque_vl_dia)
+  datos_vl_choque_dia<-mutate(datos_vl_choque_dia,residual=VR - choque_vl_dia)
+
+```
+
+#rcuadrado sobre el mismo datatraining
+```{r}
+  r2_vl_choque_dia <- 1-( sum(datos_vl_choque_dia$Residual^2) / sum((datos_vl_choque_dia$VR - mean(datos_vl_choque_dia$VR))^2) )
+  r2_vl_choque_dia
+```
+
+##Cálculo del MSE para el Modelo Lasso Día
+  
+```{r}
+MSE_modelo_lasso_dia<- sum((datos_vl_choque_dia$residual)^2)/(nrow(datos_vl_choque_dia))
+MSE_modelo_lasso_dia
+```
+
+_____________________________________________________________________________
+
+###Modelo de Bosques Aleatorios para Choque
+
+## Ajuste del bosque:
+
+```{r}
+modelo_rf_choque_dia<-randomForest(VR~DIA_NOMBRE + MES + FESTIVO + FERIA_FLORES + SEMANA_SANTA,data=datos_tr_choque_dia ,importance=FALSE,ntree=500,mtry=2)
+modelo_rf_choque_dia
+```
+
+##predicción del random forest
+
+```{r}
+pred_rf_choque_dia <- predict(modelo_rf_choque_dia, newdata=datos_vl_choque_dia )
+mean((pred_rf_choque_dia- datos_vl_choque_dia$VR)^2)
+```
+
+## Resultado del bosque
+
+Veamos el error en función del número de árboles:
+
+```{r}
+plot(modelo_rf_choque_dia)
+```
+
+## Importancia de las variables
+
+```{r}
+varImpPlot(modelo_rf_choque_dia)
+```
+
+##Cálculo del MSE para el Modelo con Random Forest
+
+
+```{r}
+MSE_modelo_rf_dia<- mean((datos_vl_choque_dia$VR-pred_rf_choque_dia)^2)
+MSE_modelo_rf_dia
+```
+
+_____________________________________________________________________________
+Realizamos la modelación para Semana
+
+
+###CHOQUE SEMANA
+
+#Separamos los datos de accidentes por choques en entrenamiento y validación
+
+```{r}
+datos_tr_choque_sem<-subset(choque_semana,subset=(ANO<"2018"))
+datos_vl_choque_sem<-subset(choque_semana,subset=(ANO>="2018") & (ANO<"2019") )
+head(datos_vl_choque_sem)
+```
+
+#MODELO LINEAL (CHOQUE_SEMANA)
+
+```{r}
+modelo_lineal_choque_semana<-lm(VR~SEMANA + FESTIVO + FERIA_FLORES + SEMANA_SANTA ,data=datos_tr_choque_sem)
+summary(modelo_lineal_choque_semana)
+```
+
+
+###Predicción Modelo Lineal
+
+```{r}
+pred_choque_sem<-predict(modelo_lineal_choque_semana,newdata = datos_vl_choque_sem)
+pred_choque_sem
+```
+
+##Cálculo del MSE para el Modelo Lineal Semana
+
+```{r}
+MSE_modelo_lineal_semana<- (1/nrow(datos_vl_choque_sem))*sum((datos_vl_choque_sem$VR- pred_choque_sem)^2)
+MSE_modelo_lineal_semana
+```
+
+_____________________________________________________________________________
+
+###Modelo Poisson para Choque (SEMANA)
+
+#Ajuste del Modelo Poisson
+
+```{r}
+modelo_glm_choque_sem<-glm(VR~SEMANA + ANO + FESTIVO + FERIA_FLORES + SEMANA_SANTA ,data=datos_tr_choque_sem,family = "poisson")
+summary(modelo_glm_choque_sem)
+```
+
+#Realizamos la predicción del modelo con los datos de validación
+
+```{r}
+pred_glm_choque_sem<-predict(modelo_glm_choque_sem,newdata = datos_vl_choque_sem)
+pred_glm_choque_sem
+```
+
+#Calculo del Pseudo $R^2$ para el Modelo Poisson:
+
+Obtengamos el (pseudo) $R^2$ para el modelo Poisson:
+```{r}
+
+y0_tr_sem<-mean(datos_tr_choque_sem$VR)
+r0_tr_sem<-datos_tr_choque_sem$VR-y0_tr_sem
+R0_tr_sem<-mean(r0_tr_sem^2)
+y_pred_tr_glm_sem<-predict(modelo_glm_choque_sem,type="response")
+r_tr_glm_sem<-datos_tr_choque_sem$VR-y_pred_tr_glm_sem
+R_tr_glm_sem<-mean(r_tr_glm_sem^2)
+R2_tr_glm_sem<-1-R_tr_glm_sem/R0_tr_sem
+```
+
+#Veamos el resultado:
+```{r}
+print(R2_tr_glm_sem)
+```
+
+
+
+##Cálculo del MSE para el Modelo Poisson Semana
+
+
+```{r}
+MSE_modelo_glm_sem<- (1/nrow(datos_vl_choque_sem))*sum((datos_vl_choque_sem$VR- pred_glm_choque_sem)^2)
+MSE_modelo_glm_sem
+```
+
+_____________________________________________________________________________
+
+###Modelo Lasso para Choque
+
+#Entrenamiento
+
+
+```{r}
+  xtrain_sem<-model.matrix(VR ~ SEMANA + FESTIVO + FERIA_FLORES + 
+    SEMANA_SANTA,datos_tr_choque_sem)[,-4]
+  ytrain_sem<-datos_tr_choque_sem$VR
+  modelo_lasso_choque_sem<-glmnet(xtrain_sem,
+                    ytrain_sem,
+                    standardize = TRUE,
+                    alpha=1,
+                    family = "poisson"
+                    )
+modelo_lasso_choque_sem
+```
+
+#Validación
+```{r}
+ x_val_sem<-model.matrix(VR ~ SEMANA + FESTIVO + FERIA_FLORES + 
+    SEMANA_SANTA,datos_vl_choque_sem)[,-4]
+  acc_vl_pred_sem<-modelo_lasso_choque_sem %>% predict(newx = x_val_sem,s=0,type="response")
+  acc_vl_pred_sem<-as.vector(acc_vl_pred_sem)
+  datos_vl_choque_sem<-mutate(datos_vl_choque_sem,acc_vl_pred_sem)
+  datos_vl_choque_sem<-mutate(datos_vl_choque_sem,residual=VR - acc_vl_pred_sem)
+
+```
+
+#rcuadrado sobre el mismo datatraining
+```{r}
+  r2_vl_sem_choque <- 1-( sum(datos_vl_choque_sem  $Residual^2) / sum((datos_vl_choque_sem$VR - mean(datos_vl_choque_sem$VR))^2) )
+  r2_vl_sem_choque
+```
+
+##Cálculo del MSE para el Modelo Lasso Semanal
+  
+```{r}
+MSE_lasso_choque_sem<- sum((datos_vl_choque_sem$residual)^2)/(nrow(datos_vl_choque_sem))
+MSE_lasso_choque_sem
+```
+
+_____________________________________________________________________________
+
+###Modelo de Bosques Aleatorios para Choque
+
+## Ajuste del bosque:
+
+```{r}
+modelo_rf_choque_sem<-randomForest(VR~SEMANA + FESTIVO + FERIA_FLORES + SEMANA_SANTA,data=datos_tr_choque_sem ,importance=FALSE,ntree=500,mtry=2)
+modelo_rf_choque_sem
+```
+
+##predicción del random forest
+
+```{r}
+pred_rf_choque_sem <- predict(modelo_rf_choque_sem, newdata=datos_vl_choque_sem)
+mean((pred_rf_choque_sem- datos_vl_choque_sem$VR)^2)
+```
+
+## Resultado del bosque
+
+Veamos el error en función del número de árboles:
+
+```{r}
+plot(modelo_rf_choque_sem)
+```
+
+## Importancia de las variables
+
+```{r}
+varImpPlot(modelo_rf_choque_sem)
+```
+
+##Cálculo del MSE para el Modelo con Random Forest
+
+
+```{r}
+MSE_modelo_rf_sem<- mean((datos_vl_choque_sem$VR-pred_rf_choque_sem)^2)
+MSE_modelo_rf_sem
+```
+
+_____________________________________________________________________________
+Realizamos la modelación para el mes
+
+
+###CHOQUE MES
+
+#Separamos los datos de accidentes por choques en entrenamiento y validación
+
+```{r}
+datos_tr_choque_mes<-subset(choque_mes,subset=(ANO<"2018"))
+datos_vl_choque_mes<-subset(choque_mes,subset=(ANO>="2018") & (ANO<"2019") )
+head(datos_vl_choque_mes)
+```
+#MODELO LINEAL (CHOQUE_MES)
+ 
+```{r}
+modelo_lineal_choque_mes<-lm(VR~MES + FESTIVO + FERIA_FLORES + SEMANA_SANTA ,data=datos_tr_choque_mes)
+summary(modelo_lineal_choque_mes)
+```
+
+###Predicción Modelo Lineal
+
+```{r}
+pred_choque_mes<-predict(modelo_lineal_choque_mes,newdata = datos_vl_choque_mes)
+pred_choque_mes
+```
+
+##Cálculo del MSE para el Modelo Lineal Mensual
+
+```{r}
+MSE_modelo_lineal_mes<- (1/nrow(datos_vl_choque_mes))*sum((datos_vl_choque_mes$VR- pred_choque_mes)^2)
+MSE_modelo_lineal_mes
+```
+
+_____________________________________________________________________________
+
+###Modelo Poisson para Choque (MENSUAL)
+
+#Ajuste del Modelo Poisson
+
+```{r}
+modelo_glm_choque_mes<-glm(VR~MES + FESTIVO + FERIA_FLORES + SEMANA_SANTA ,data=datos_tr_choque_mes,family = "poisson")
+summary(modelo_glm_choque_mes)
+```
+
+#Realizamos la predicción del modelo con los datos de validación
+
+```{r}
+pred_glm_choque_mes<-predict(modelo_glm_choque_mes,newdata = datos_vl_choque_mes)
+pred_glm_choque_mes
+```
+
+
+#Calculo del Pseudo $R^2$ para el Modelo Poisson:
+
+Obtengamos el (pseudo) $R^2$ para el modelo Poisson:
+```{r}
+
+y0_tr_mes<-mean(datos_tr_choque_mes$VR)
+r0_tr_mes<-datos_tr_choque_mes$VR-y0_tr_mes
+R0_tr_mes<-mean(r0_tr_mes^2)
+y_pred_tr_glm_mes<-predict(modelo_glm_choque_mes,type="response")
+r_tr_glm_mes<-datos_tr_choque_mes$VR-y_pred_tr_glm_mes
+R_tr_glm_mes<-mean(r_tr_glm_mes^2)
+R2_tr_glm_mes<-1-R_tr_glm_sem/R0_tr_mes
+```
+
+#Veamos el resultado:
+```{r}
+print(R2_tr_glm_mes)
+```
+
+##Cálculo del MSE para el Modelo Poisson Mensual
+
+
+```{r}
+MSE_modelo_glm_mes<- (1/nrow(datos_vl_choque_mes))*sum((datos_vl_choque_mes$VR- pred_glm_choque_mes)^2)
+MSE_modelo_glm_mes
+```
+
+_____________________________________________________________________________
+
+###Modelo Lasso para Choque Mensual
+
+#Entrenamiento
+
+
+```{r}
+  xtrain_mes<-model.matrix(VR ~ MES + FESTIVO + FERIA_FLORES + 
+    SEMANA_SANTA,datos_tr_choque_mes)[,-4]
+  ytrain_mes<-datos_tr_choque_mes$VR
+  modelo_lasso_choque_mes<-glmnet(xtrain_mes,
+                    ytrain_mes,
+                    standardize = TRUE,
+                    alpha=1,
+                    family = "poisson"
+                    )
+modelo_lasso_choque_mes
+```
+
+#Validación
+```{r}
+ x_val_mes<-model.matrix(VR ~ MES + FESTIVO + FERIA_FLORES + 
+    SEMANA_SANTA,datos_vl_choque_mes)[,-4]
+  acc_vl_pred_mes<-modelo_lasso_choque_mes %>% predict(newx = x_val_mes,s=0,type="response")
+  acc_vl_pred_mes<-as.vector(acc_vl_pred_mes)
+  datos_vl_choque_mes<-mutate(datos_vl_choque_mes,acc_vl_pred_mes)
+  datos_vl_choque_mes<-mutate(datos_vl_choque_mes,residual=VR - acc_vl_pred_mes)
+
+```
+
+#rcuadrado sobre el mismo datatraining
+```{r}
+  r2_vl_choque_mes <- 1-( sum(datos_vl_choque_mes  $Residual^2) / sum((datos_vl_choque_mes$VR - mean(datos_vl_choque_mes$VR))^2) )
+  r2_vl_choque_mes
+```
+
+##Cálculo del MSE para el Modelo Lasso Mensual
+  
+```{r}
+MSE_modelo_lasso_mes<- sum((datos_vl_choque_mes$residual)^2)/(nrow(datos_vl_choque_mes))
+MSE_modelo_lasso_mes
+```
+
+_____________________________________________________________________________
+
+###Modelo de Bosques Aleatorios para Choque Mensual
+
+## Ajuste del bosque:
+
+```{r}
+modelo_rf_choque_mes<-randomForest(VR~MES + FESTIVO + FERIA_FLORES + SEMANA_SANTA,data=datos_tr_choque_mes ,importance=FALSE,ntree=500,mtry=2)
+modelo_rf_choque_mes
+```
+
+##predicción del random forest
+
+```{r}
+pred_rf_choque_mes <- predict(modelo_rf_choque_mes, newdata=datos_vl_choque_mes)
+mean((pred_rf_choque_mes- datos_vl_choque_mes$VR)^2)
+```
+
+## Resultado del bosque
+
+Veamos el error en función del número de árboles:
+
+```{r}
+plot(modelo_rf_choque_mes)
+```
+
+
+## Importancia de las variables
+
+```{r}
+varImpPlot(modelo_rf_choque_mes)
+```
+
+##Cálculo del MSE para el Modelo con Random Forest
+
+
+```{r}
+MSE_modelo_rf_mes<- mean((datos_vl_choque_mes$VR-pred_rf_choque_mes)^2)
+MSE_modelo_rf_mes
+```
+
+
+###FIN MODELACION PARA CHOQUE###
+______________________________________________________________________________
+
+### ATROPELLO
+
+#DIA
+
+```{r}
+atropello_dia<-aggregate(VR~CLASE*DIA_NOMBRE*DIA*MES*SEMANA*ANO*FESTIVO*FERIA_FLORES*SEMANA_SANTA, data = data_accidentes, subset = data_accidentes$CLASE == "Atropello", FUN = sum)
+head(atropello_dia)
+```
+
+#SEMANA
+
+```{r}
+atropello_semana<-aggregate(VR~CLASE*SEMANA*ANO*FESTIVO*FERIA_FLORES*SEMANA_SANTA, data = data_accidentes, subset = data_accidentes$CLASE == "Atropello", FUN = sum)
+head(atropello_semana)
+```
+
+#MES
+
+```{r}
+atropello_mes<-aggregate(VR~CLASE*MES*ANO*FESTIVO*FERIA_FLORES*SEMANA_SANTA, data = data_accidentes, subset = data_accidentes$CLASE == "Atropello", FUN = sum)
+head(atropello_mes)
+```
+
+###Modelamiento
+
+###ATROPELLO DIA
+
+#Separamos los datos de accidentes por atropellos en entrenamiento y validación
+
+```{r}
+datos_tr_atropello_dia<-subset(atropello_dia,subset=(ANO<"2018"))
+datos_vl_atropello_dia<-subset(atropello_dia,subset=(ANO>="2018") & (ANO<"2019") )
+head(datos_vl_atropello_dia)
+```
+
+#MODELO LINEAL (ATROPELLO_DIA)
+ 
+```{r}
+lm_atropello_dia<-lm(VR~DIA_NOMBRE + MES + FESTIVO + FERIA_FLORES + SEMANA_SANTA ,data=datos_tr_atropello_dia)
+summary(lm_atropello_dia)
+```
+
+###Predicción Modelo Lineal
+
+```{r}
+pred_atropello_dia<-predict(lm_atropello_dia,newdata = datos_vl_atropello_dia)
+pred_atropello_dia
+```
+
+##Cálculo del MSE para el Modelo Lineal Día
+
+```{r}
+MSE_lm_atropello_dia<- (1/nrow(datos_vl_atropello_dia))*sum((datos_vl_atropello_dia$VR- pred_atropello_dia)^2)
+MSE_lm_atropello_dia
+```
+
+_____________________________________________________________________________
+
+###Modelo Poisson para Atropello
+
+#Ajuste del Modelo Poisson
+
+```{r}
+glm_atropello_dia<-glm(VR~DIA_NOMBRE + MES + FESTIVO + FERIA_FLORES + SEMANA_SANTA ,data=datos_tr_atropello_dia,family = "poisson")
+summary(glm_atropello_dia)
+```
+
+#Realizamos la predicción del modelo con los datos de validación
+
+```{r}
+pred_glm_atropello_dia<-predict(glm_atropello_dia,newdata = datos_vl_atropello_dia)
+pred_glm_atropello_dia
+```
+
+#Calculo del Pseudo $R^2$ para el Modelo Poisson:
+
+Obtengamos el (pseudo) $R^2$ para el modelo Poisson:
+```{r}
+
+y0_tr_atr_dia<-mean(datos_tr_atropello_dia$VR)
+r0_tr_atr_dia<-datos_tr_atropello_dia$VR-y0_tr_atr_dia
+R0_tr_atr_dia<-mean(r0_tr_atr_dia^2)
+y_pred_tr_glm_atr_dia<-predict(glm_atropello_dia,type="response")
+r_tr_glm_atr_dia<-datos_tr_atropello_dia$VR-y_pred_tr_glm_atr_dia
+R_tr_glm_atr_dia<-mean(r_tr_glm_atr_dia^2)
+R2_tr_glm_atr_dia<-1-R_tr_glm_atr_dia/R0_tr_atr_dia
+```
+
+#Veamos el resultado:
+```{r}
+print(R2_tr_glm_atr_dia)
+```
+
+
+##Cálculo del MSE para el Modelo Poisson Día
+
+
+```{r}
+MSE_glm_atropello_dia<- (1/nrow(datos_vl_atropello_dia))*sum((datos_vl_atropello_dia$VR- pred_glm_atropello_dia)^2)
+MSE_glm_atropello_dia
+```
+
+_____________________________________________________________________________
+
+###Modelo Lasso para Atropello
+
+#Entrenamiento
+
+
+```{r}
+  xtrain_at_dia<-model.matrix(VR ~ DIA_NOMBRE + MES + FESTIVO + FERIA_FLORES + 
+    SEMANA_SANTA,datos_tr_atropello_dia)[,-4]
+  ytrain_at_dia<-datos_tr_atropello_dia$VR
+  lasso_atropello_dia<-glmnet(xtrain_at_dia,
+                    ytrain_at_dia,
+                    standardize = FALSE,
+                    alpha=1,
+                    family = "poisson"
+                    )
+lasso_atropello_dia
+```
+
+#Validación
+```{r}
+ x_val_atropello_dia<-model.matrix(VR ~ DIA_NOMBRE + MES + FESTIVO + FERIA_FLORES + SEMANA_SANTA,datos_vl_atropello_dia)[,-4]
+  atropello_vl_dia<-lasso_atropello_dia %>% predict(newx = x_val_atropello_dia,s=0,type="response")
+  atropello_vl_dia<-as.vector(atropello_vl_dia)
+  datos_vl_atropello_dia<-mutate(datos_vl_atropello_dia,atropello_vl_dia)
+  datos_vl_atropello_dia<-mutate(datos_vl_atropello_dia,residual=VR - atropello_vl_dia)
+
+```
+
+#rcuadrado sobre el mismo datatraining
+```{r}
+  r2_vl_atropello_dia <- 1-( sum(datos_vl_atropello_dia$Residual^2) / sum((datos_vl_atropello_dia$VR - mean(datos_vl_atropello_dia$VR))^2) )
+  r2_vl_atropello_dia
+```
+
+##Cálculo del MSE para el Modelo Lasso Día
+  
+```{r}
+MSE_lasso_atropello_dia<- sum((datos_vl_atropello_dia$residual)^2)/(nrow(datos_vl_atropello_dia))
+MSE_lasso_atropello_dia
+```
+
+_____________________________________________________________________________
+
+###Modelo de Bosques Aleatorios para Atropello
+
+## Ajuste del bosque:
+
+```{r}
+rf_atropello_dia<-randomForest(VR~DIA_NOMBRE + MES + FESTIVO + FERIA_FLORES + SEMANA_SANTA,data=datos_tr_atropello_dia ,importance=FALSE,ntree=500,mtry=2)
+rf_atropello_dia
+```
+
+##predicción del random forest
+
+```{r}
+pred_rf_atropello_dia <- predict(rf_atropello_dia, newdata=datos_vl_atropello_dia )
+mean((pred_rf_atropello_dia- datos_vl_atropello_dia$VR)^2)
+```
+
+## Resultado del bosque
+
+Veamos el error en función del número de árboles:
+
+```{r}
+plot(rf_atropello_dia)
+```
+
+## Importancia de las variables
+
+```{r}
+varImpPlot(rf_atropello_dia)
+```
+
+##Cálculo del MSE para el Modelo con Random Forest
+
+
+```{r}
+MSE_rf_atropello_dia<- mean((datos_vl_atropello_dia$VR-pred_rf_atropello_dia)^2)
+MSE_rf_atropello_dia
+```
+
+_____________________________________________________________________________
+Realizamos la modelación para Semana
+
+
+###ATROPELLO SEMANA
+
+#Separamos los datos de accidentes por atropello en entrenamiento y validación
+
+```{r}
+datos_tr_atropello_sem<-subset(atropello_semana,subset=(ANO<"2018"))
+datos_vl_atropello_sem<-subset(atropello_semana,subset=(ANO>="2018") & (ANO<"2019") )
+head(datos_vl_atropello_sem)
+```
+
+#MODELO LINEAL (ATROPELLO_SEMANA)
+
+```{r}
+ml_atropello_semana<-lm(VR~SEMANA + FESTIVO + FERIA_FLORES + SEMANA_SANTA ,data=datos_tr_atropello_sem)
+summary(ml_atropello_semana)
+```
+
+
+###Predicción Modelo Lineal
+
+```{r}
+pred_atropello_sem<-predict(ml_atropello_semana,newdata = datos_vl_atropello_sem)
+pred_atropello_sem
+```
+
+##Cálculo del MSE para el Modelo Lineal Semana
+
+```{r}
+MSE_ml_atropello_sem<- (1/nrow(datos_vl_atropello_sem))*sum((datos_vl_atropello_sem$VR- pred_atropello_sem)^2)
+MSE_ml_atropello_sem
+```
+
+_____________________________________________________________________________
+
+###Modelo Poisson para Atropello (SEMANA)
+
+#Ajuste del Modelo Poisson
+
+```{r}
+glm_atropello_sem<-glm(VR~SEMANA + ANO + FESTIVO + FERIA_FLORES + SEMANA_SANTA ,data=datos_tr_atropello_sem,family = "poisson")
+summary(glm_atropello_sem)
+```
+
+#Realizamos la predicción del modelo con los datos de validación
+
+```{r}
+pred_glm_atropello_sem<-predict(glm_atropello_sem,newdata = datos_vl_atropello_sem)
+pred_glm_atropello_sem
+```
+
+#Calculo del Pseudo $R^2$ para el Modelo Poisson:
+
+Obtengamos el (pseudo) $R^2$ para el modelo Poisson:
+```{r}
+
+y0_tr_atr_sem<-mean(datos_tr_atropello_sem$VR)
+r0_tr_atr_sem<-datos_tr_atropello_sem$VR-y0_tr_atr_sem
+R0_tr_atr_sem<-mean(r0_tr_atr_sem^2)
+y_pred_tr_glm_atr_sem<-predict(glm_atropello_sem,type="response")
+r_tr_glm_atr_sem<-datos_tr_atropello_sem$VR-y_pred_tr_glm_atr_sem
+R_tr_glm_atr_sem<-mean(r_tr_glm_atr_sem^2)
+R2_tr_glm_atr_sem<-1-R_tr_glm_atr_sem/R0_tr_atr_sem
+```
+
+#Veamos el resultado:
+```{r}
+print(R2_tr_glm_atr_sem)
+```
+
+
+
+##Cálculo del MSE para el Modelo Poisson Semana
+
+
+```{r}
+MSE_glm_atropello_sem<- (1/nrow(datos_vl_atropello_sem))*sum((datos_vl_atropello_sem$VR- pred_glm_atropello_sem)^2)
+MSE_glm_atropello_sem
+```
+
+_____________________________________________________________________________
+
+###Modelo Lasso para Atropello
+
+#Entrenamiento
+
+
+```{r}
+  xtrain_atr_sem<-model.matrix(VR ~ SEMANA + FESTIVO + FERIA_FLORES + 
+    SEMANA_SANTA,datos_tr_atropello_sem)[,-4]
+  ytrain_atr_sem<-datos_tr_atropello_sem$VR
+ lasso_atropello_sem<-glmnet(xtrain_atr_sem,
+                    ytrain_atr_sem,
+                    standardize = TRUE,
+                    alpha=1,
+                    family = "poisson"
+                    )
+lasso_atropello_sem
+```
+
+#Validación
+```{r}
+ x_val_atr_sem<-model.matrix(VR ~ SEMANA + FESTIVO + FERIA_FLORES + 
+    SEMANA_SANTA,datos_vl_atropello_sem)[,-4]
+  acc_vl_pred_atr_sem<-lasso_atropello_sem %>% predict(newx = x_val_atr_sem,s=0,type="response")
+  acc_vl_pred_atr_sem<-as.vector(acc_vl_pred_atr_sem)
+  datos_vl_atropello_sem<-mutate(datos_vl_atropello_sem,acc_vl_pred_atr_sem)
+  datos_vl_atropello_sem<-mutate(datos_vl_atropello_sem,residual=VR - acc_vl_pred_atr_sem)
+
+```
+
+#rcuadrado sobre el mismo datatraining
+```{r}
+  r2_vl_sem_atr <- 1-( sum(datos_vl_atropello_sem  $Residual^2) / sum((datos_vl_atropello_sem$VR - mean(datos_vl_atropello_sem$VR))^2) )
+  r2_vl_sem_atr
+```
+
+##Cálculo del MSE para el Modelo Lasso Semanal
+  
+```{r}
+MSE_lasso_atropello_sem<- sum((datos_vl_atropello_sem$residual)^2)/(nrow(datos_vl_atropello_sem))
+MSE_lasso_atropello_sem
+```
+
+_____________________________________________________________________________
+
+###Modelo de Bosques Aleatorios para Atropello
+
+## Ajuste del bosque:
+
+```{r}
+rf_atropello_sem<-randomForest(VR~SEMANA + FESTIVO + FERIA_FLORES + SEMANA_SANTA,data=datos_tr_atropello_sem ,importance=FALSE,ntree=500,mtry=2)
+rf_atropello_sem
+```
+
+##predicción del random forest
+
+```{r}
+pred_rf_atropello_sem <- predict(rf_atropello_sem, newdata=datos_vl_atropello_sem)
+mean((pred_rf_atropello_sem- datos_vl_atropello_sem$VR)^2)
+```
+
+## Resultado del bosque
+
+Veamos el error en función del número de árboles:
+
+```{r}
+plot(rf_atropello_sem)
+```
+
+## Importancia de las variables
+
+```{r}
+varImpPlot(rf_atropello_sem)
+```
+
+##Cálculo del MSE para el Modelo con Random Forest
+
+
+```{r}
+MSE_rf_atropello_sem<- mean((datos_vl_atropello_sem$VR-pred_rf_atropello_sem)^2)
+MSE_rf_atropello_sem
+```
+
+_____________________________________________________________________________
+Realizamos la modelación para el mes
+
+
+###ATROPELLO MES
+
+#Separamos los datos de accidentes por atropello en entrenamiento y validación
+
+```{r}
+datos_tr_atropello_mes<-subset(atropello_mes,subset=(ANO<"2018"))
+datos_vl_atropello_mes<-subset(atropello_mes,subset=(ANO>="2018") & (ANO<"2019") )
+head(datos_vl_atropello_mes)
+```
+#MODELO LINEAL (ATROPELLO_MES)
+ 
+```{r}
+ml_atropello_mes<-lm(VR~MES + FESTIVO + FERIA_FLORES + SEMANA_SANTA ,data=datos_tr_atropello_mes)
+summary(ml_atropello_mes)
+```
+
+###Predicción Modelo Lineal
+
+```{r}
+pred_atropello_mes<-predict(ml_atropello_mes,newdata = datos_vl_atropello_mes)
+pred_atropello_mes
+```
+
+##Cálculo del MSE para el Modelo Lineal Mensual
+
+```{r}
+MSE_ml_atropello_mes<- (1/nrow(datos_vl_atropello_mes))*sum((datos_vl_atropello_mes$VR- pred_atropello_mes)^2)
+MSE_ml_atropello_mes
+```
+
+_____________________________________________________________________________
+
+###Modelo Poisson para Atropello (MENSUAL)
+
+#Ajuste del Modelo Poisson
+
+```{r}
+glm_atropello_mes<-glm(VR~MES + FESTIVO + FERIA_FLORES + SEMANA_SANTA ,data=datos_tr_atropello_mes,family = "poisson")
+summary(glm_atropello_mes)
+```
+
+#Realizamos la predicción del modelo con los datos de validación
+
+```{r}
+pred_glm_atropello_mes<-predict(glm_atropello_mes,newdata = datos_vl_atropello_mes)
+pred_glm_atropello_mes
+```
+
+
+#Calculo del Pseudo $R^2$ para el Modelo Poisson:
+
+Obtengamos el (pseudo) $R^2$ para el modelo Poisson:
+```{r}
+
+y0_tr_atr_mes<-mean(datos_tr_atropello_mes$VR)
+r0_tr_atr_mes<-datos_tr_atropello_mes$VR-y0_tr_atr_mes
+R0_tr_atr_mes<-mean(r0_tr_atr_mes^2)
+y_pred_tr_glm_atr_mes<-predict(glm_atropello_mes,type="response")
+r_tr_glm_atr_mes<-datos_tr_atropello_mes$VR-y_pred_tr_glm_atr_mes
+R_tr_glm_atr_mes<-mean(r_tr_glm_atr_mes^2)
+R2_tr_glm_atr_mes<-1-R_tr_glm_atr_mes/R0_tr_atr_mes
+```
+
+#Veamos el resultado:
+```{r}
+print(R2_tr_glm_atr_mes)
+```
+
+##Cálculo del MSE para el Modelo Poisson Mensual
+
+
+```{r}
+MSE_glm_atropello_mes<- (1/nrow(datos_vl_atropello_mes))*sum((datos_vl_atropello_mes$VR- pred_glm_atropello_mes)^2)
+MSE_glm_atropello_mes
+```
+
+_____________________________________________________________________________
+
+###Modelo Lasso para Atropello Mensual
+
+#Entrenamiento
+
+
+```{r}
+  xtrain_atr_mes<-model.matrix(VR ~ MES + FESTIVO + FERIA_FLORES + 
+    SEMANA_SANTA,datos_tr_atropello_mes)[,-4]
+  ytrain_atr_mes<-datos_tr_atropello_mes$VR
+  lasso_atropello_mes<-glmnet(xtrain_atr_mes,
+                    ytrain_atr_mes,
+                    standardize = TRUE,
+                    alpha=1,
+                    family = "poisson"
+                    )
+lasso_atropello_mes
+```
+
+#Validación
+```{r}
+ x_val_atr_mes<-model.matrix(VR ~ MES + FESTIVO + FERIA_FLORES + 
+    SEMANA_SANTA,datos_vl_atropello_mes)[,-4]
+  acc_vl_pred_atr_mes<-lasso_atropello_mes %>% predict(newx = x_val_atr_mes,s=0,type="response")
+  acc_vl_pred_atr_mes<-as.vector(acc_vl_pred_atr_mes)
+  datos_vl_atropello_mes<-mutate(datos_vl_atropello_mes,acc_vl_pred_atr_mes)
+  datos_vl_atropello_mes<-mutate(datos_vl_atropello_mes,residual=VR - acc_vl_pred_atr_mes)
+
+```
+
+#rcuadrado sobre el mismo datatraining
+```{r}
+  r2_vl_atropello_mes <- 1-( sum(datos_vl_atropello_mes  $Residual^2) / sum((datos_vl_atropello_mes$VR - mean(datos_vl_atropello_mes$VR))^2) )
+  r2_vl_atropello_mes
+```
+
+##Cálculo del MSE para el Modelo Lasso Mensual
+  
+```{r}
+MSE_lasso_atr_mes<- sum((datos_vl_atropello_mes$residual)^2)/(nrow(datos_vl_atropello_mes))
+MSE_lasso_atr_mes
+```
+
+_____________________________________________________________________________
+
+###Modelo de Bosques Aleatorios para Atropello Mensual
+
+## Ajuste del bosque:
+
+```{r}
+rf_atropello_mes<-randomForest(VR~MES + FESTIVO + FERIA_FLORES + SEMANA_SANTA,data=datos_tr_atropello_mes ,importance=FALSE,ntree=500,mtry=2)
+rf_atropello_mes
+```
+
+##predicción del random forest
+
+```{r}
+pred_rf_atropello_mes <- predict(rf_atropello_mes, newdata=datos_vl_atropello_mes)
+mean((pred_rf_atropello_mes- datos_vl_atropello_mes$VR)^2)
+```
+
+## Resultado del bosque
+
+Veamos el error en función del número de árboles:
+
+```{r}
+plot(rf_atropello_mes)
+```
+
+
+## Importancia de las variables
+
+```{r}
+varImpPlot(rf_atropello_mes)
+```
+
+##Cálculo del MSE para el Modelo con Random Forest
+
+
+```{r}
+MSE_rf_atropello_mes<- mean((datos_vl_atropello_mes$VR-pred_rf_atropello_mes)^2)
+MSE_rf_atropello_mes
+```
+
+
+###FIN MODELACION PARA ATROPELLO###
+______________________________________________________________________________
+
+
+### CAIDA
+
+#DIA
+
+```{r}
+caida_dia<-aggregate(VR~CLASE*DIA_NOMBRE*DIA*MES*SEMANA*ANO*FESTIVO*FERIA_FLORES*SEMANA_SANTA, data = data_accidentes, subset = data_accidentes$CLASE == "Caida", FUN = sum)
+head(caida_dia)
+```
+
+#SEMANA
+
+```{r}
+caida_semana<-aggregate(VR~CLASE*SEMANA*ANO*FESTIVO*FERIA_FLORES*SEMANA_SANTA, data = data_accidentes, subset = data_accidentes$CLASE == "Caida", FUN = sum)
+head(caida_semana)
+```
+
+#MES
+
+```{r}
+caida_mes<-aggregate(VR~CLASE*MES*ANO*FESTIVO*FERIA_FLORES*SEMANA_SANTA, data = data_accidentes, subset = data_accidentes$CLASE == "Caida", FUN = sum)
+head(caida_mes)
+```
+
+###Modelamiento
+
+###CAIDA DIA
+
+#Separamos los datos de accidentes por caídas en entrenamiento y validación
+
+```{r}
+datos_tr_caida_dia<-subset(caida_dia,subset=(ANO<"2018"))
+datos_vl_caida_dia<-subset(caida_dia,subset=(ANO>="2018") & (ANO<"2019") )
+head(datos_vl_caida_dia)
+```
+
+#MODELO LINEAL (CAIDA_DIA)
+ 
+```{r}
+lm_caida_dia<-lm(VR~DIA_NOMBRE + MES + FESTIVO + FERIA_FLORES + SEMANA_SANTA ,data=datos_tr_caida_dia)
+summary(lm_caida_dia)
+```
+
+###Predicción Modelo Lineal
+
+```{r}
+pred_caida_dia<-predict(lm_caida_dia,newdata = datos_vl_caida_dia)
+pred_caida_dia
+```
+
+##Cálculo del MSE para el Modelo Lineal Día
+
+```{r}
+MSE_lm_caida_dia<- (1/nrow(datos_vl_caida_dia))*sum((datos_vl_caida_dia$VR- pred_caida_dia)^2)
+MSE_lm_caida_dia
+```
+
+_____________________________________________________________________________
+
+###Modelo Poisson para Caída
+
+#Ajuste del Modelo Poisson
+
+```{r}
+glm_caida_dia<-glm(VR~DIA_NOMBRE + MES + FESTIVO + FERIA_FLORES + SEMANA_SANTA ,data=datos_tr_caida_dia,family = "poisson")
+summary(glm_caida_dia)
+```
+
+#Realizamos la predicción del modelo con los datos de validación
+
+```{r}
+pred_glm_caida_dia<-predict(glm_caida_dia,newdata = datos_vl_caida_dia)
+pred_glm_caida_dia
+```
+
+#Calculo del Pseudo $R^2$ para el Modelo Poisson:
+
+Obtengamos el (pseudo) $R^2$ para el modelo Poisson:
+```{r}
+
+y0_tr_caida_dia<-mean(datos_tr_caida_dia$VR)
+r0_tr_caida_dia<-datos_tr_caida_dia$VR-y0_tr_caida_dia
+R0_tr_caida_dia<-mean(r0_tr_caida_dia^2)
+y_pred_tr_glm_caida_dia<-predict(glm_caida_dia,type="response")
+r_tr_glm_caida_dia<-datos_tr_caida_dia$VR-y_pred_tr_glm_caida_dia
+R_tr_glm_caida_dia<-mean(r_tr_glm_caida_dia^2)
+R2_tr_glm_caida_dia<-1-R_tr_glm_caida_dia/R0_tr_caida_dia
+```
+
+#Veamos el resultado:
+```{r}
+print(R2_tr_glm_caida_dia)
+```
+
+
+##Cálculo del MSE para el Modelo Poisson Día
+
+
+```{r}
+MSE_glm_caida_dia<- (1/nrow(datos_vl_caida_dia))*sum((datos_vl_caida_dia$VR- pred_glm_caida_dia)^2)
+MSE_glm_caida_dia
+```
+
+_____________________________________________________________________________
+
+###Modelo Lasso para Caída
+
+#Entrenamiento
+
+
+```{r}
+  xtrain_caida_dia<-model.matrix(VR ~ DIA_NOMBRE + MES + FESTIVO + FERIA_FLORES + SEMANA_SANTA,datos_tr_caida_dia)[,-4]
+  ytrain_caida_dia<-datos_tr_caida_dia$VR
+  lasso_caida_dia<-glmnet(xtrain_caida_dia,
+                    ytrain_caida_dia,
+                    standardize = FALSE,
+                    alpha=1,
+                    family = "poisson"
+                    )
+lasso_caida_dia
+```
+
+#Validación
+```{r}
+ x_val_caida_dia<-model.matrix(VR ~ DIA_NOMBRE + MES + FESTIVO + FERIA_FLORES + SEMANA_SANTA,datos_vl_caida_dia)[,-4]
+ caida_vl_dia<-lasso_caida_dia %>% predict(newx = x_val_caida_dia,s=0,type="response")
+  caida_vl_dia<-as.vector(caida_vl_dia)
+  datos_vl_caida_dia<-mutate(datos_vl_caida_dia,caida_vl_dia)
+  datos_vl_caida_dia<-mutate(datos_vl_caida_dia,residual=VR - caida_vl_dia)
+
+```
+
+#rcuadrado sobre el mismo datatraining
+```{r}
+  r2_vl_caida_dia <- 1-( sum(datos_vl_caida_dia$Residual^2) / sum((datos_vl_caida_dia$VR - mean(datos_vl_caida_dia$VR))^2) )
+  r2_vl_caida_dia
+```
+
+##Cálculo del MSE para el Modelo Lasso Día
+  
+```{r}
+MSE_lasso_caida_dia<- sum((datos_vl_caida_dia$residual)^2)/(nrow(datos_vl_caida_dia))
+MSE_lasso_caida_dia
+```
+
+_____________________________________________________________________________
+
+###Modelo de Bosques Aleatorios para Caída
+
+## Ajuste del bosque:
+
+```{r}
+rf_caida_dia<-randomForest(VR~DIA_NOMBRE + MES + FESTIVO + FERIA_FLORES + SEMANA_SANTA,data=datos_tr_caida_dia ,importance=FALSE,ntree=500,mtry=2)
+rf_caida_dia
+```
+
+##predicción del random forest
+
+```{r}
+pred_rf_caida_dia <- predict(rf_caida_dia, newdata=datos_vl_caida_dia )
+mean((pred_rf_caida_dia- datos_vl_caida_dia$VR)^2)
+```
+
+## Resultado del bosque
+
+Veamos el error en función del número de árboles:
+
+```{r}
+plot(rf_caida_dia)
+```
+
+## Importancia de las variables
+
+```{r}
+varImpPlot(rf_caida_dia)
+```
+
+##Cálculo del MSE para el Modelo con Random Forest
+
+
+```{r}
+MSE_rf_caida_dia<- mean((datos_vl_caida_dia$VR-pred_rf_caida_dia)^2)
+MSE_rf_caida_dia
+```
+
+_____________________________________________________________________________
+Realizamos la modelación para Semana
+
+
+###CAIDA SEMANA
+
+#Separamos los datos de accidentes por caida en entrenamiento y validación
+
+```{r}
+datos_tr_caida_sem<-subset(caida_semana,subset=(ANO<"2018"))
+datos_vl_caida_sem<-subset(caida_semana,subset=(ANO>="2018") & (ANO<"2019") )
+head(datos_vl_caida_sem)
+```
+
+#MODELO LINEAL (CAIDA_SEMANA)
+
+```{r}
+ml_caida_semana<-lm(VR~SEMANA + FESTIVO + FERIA_FLORES + SEMANA_SANTA ,data=datos_tr_caida_sem)
+summary(ml_caida_semana)
+```
+
+
+###Predicción Modelo Lineal
+
+```{r}
+pred_caida_sem<-predict(ml_caida_semana,newdata = datos_vl_caida_sem)
+pred_caida_sem
+```
+
+##Cálculo del MSE para el Modelo Lineal Semana
+
+```{r}
+MSE_ml_caida_sem<- (1/nrow(datos_vl_caida_sem))*sum((datos_vl_caida_sem$VR- pred_caida_sem)^2)
+MSE_ml_caida_sem
+```
+
+_____________________________________________________________________________
+
+###Modelo Poisson para Caída (SEMANA)
+
+#Ajuste del Modelo Poisson
+
+```{r}
+glm_caida_sem<-glm(VR~SEMANA + ANO + FESTIVO + FERIA_FLORES + SEMANA_SANTA ,data=datos_tr_caida_sem,family = "poisson")
+summary(glm_caida_sem)
+```
+
+#Realizamos la predicción del modelo con los datos de validación
+
+```{r}
+pred_glm_caida_sem<-predict(glm_caida_sem,newdata = datos_vl_caida_sem)
+pred_glm_caida_sem
+```
+
+#Calculo del Pseudo $R^2$ para el Modelo Poisson:
+
+Obtengamos el (pseudo) $R^2$ para el modelo Poisson:
+```{r}
+
+y0_tr_caida_sem<-mean(datos_tr_caida_sem$VR)
+r0_tr_caida_sem<-datos_tr_caida_sem$VR-y0_tr_caida_sem
+R0_tr_caida_sem<-mean(r0_tr_caida_sem^2)
+y_pred_tr_glm_caida_sem<-predict(glm_caida_sem,type="response")
+r_tr_glm_caida_sem<-datos_tr_caida_sem$VR-y_pred_tr_glm_caida_sem
+R_tr_glm_caida_sem<-mean(r_tr_glm_caida_sem^2)
+R2_tr_glm_caida_sem<-1-R_tr_glm_caida_sem/R0_tr_caida_sem
+```
+
+#Veamos el resultado:
+```{r}
+print(R2_tr_glm_caida_sem)
+```
+
+
+
+##Cálculo del MSE para el Modelo Poisson Semana
+
+
+```{r}
+MSE_glm_caida_sem<- (1/nrow(datos_vl_caida_sem))*sum((datos_vl_caida_sem$VR- pred_glm_caida_sem)^2)
+MSE_glm_caida_sem
+```
+
+_____________________________________________________________________________
+
+###Modelo Lasso para caida
+
+#Entrenamiento
+
+
+```{r}
+  xtrain_caida_sem<-model.matrix(VR ~ SEMANA + FESTIVO + FERIA_FLORES + 
+    SEMANA_SANTA,datos_tr_caida_sem)[,-4]
+  ytrain_caida_sem<-datos_tr_caida_sem$VR
+ lasso_caida_sem<-glmnet(xtrain_caida_sem,
+                    ytrain_caida_sem,
+                    standardize = TRUE,
+                    alpha=1,
+                    family = "poisson"
+                    )
+lasso_caida_sem
+```
+
+#Validación
+```{r}
+ x_val_caida_sem<-model.matrix(VR ~ SEMANA + FESTIVO + FERIA_FLORES + 
+    SEMANA_SANTA,datos_vl_caida_sem)[,-4]
+  acc_vl_pred_caida_sem<-lasso_caida_sem %>% predict(newx = x_val_caida_sem,s=0,type="response")
+  acc_vl_pred_caida_sem<-as.vector(acc_vl_pred_caida_sem)
+  datos_vl_caida_sem<-mutate(datos_vl_caida_sem,acc_vl_pred_caida_sem)
+  datos_vl_caida_sem<-mutate(datos_vl_caida_sem,residual=VR - acc_vl_pred_caida_sem)
+
+```
+
+#rcuadrado sobre el mismo datatraining
+```{r}
+  r2_vl_sem_caida <- 1-( sum(datos_vl_caida_sem  $Residual^2) / sum((datos_vl_caida_sem$VR - mean(datos_vl_caida_sem$VR))^2) )
+  r2_vl_sem_caida
+```
+
+##Cálculo del MSE para el Modelo Lasso Semanal
+  
+```{r}
+MSE_lasso_caida_sem<- sum((datos_vl_caida_sem$residual)^2)/(nrow(datos_vl_caida_sem))
+MSE_lasso_caida_sem
+```
+
+_____________________________________________________________________________
+
+###Modelo de Bosques Aleatorios para Caída
+
+## Ajuste del bosque:
+
+```{r}
+rf_caida_sem<-randomForest(VR~SEMANA + FESTIVO + FERIA_FLORES + SEMANA_SANTA,data=datos_tr_caida_sem ,importance=FALSE,ntree=500,mtry=2)
+rf_caida_sem
+```
+
+##predicción del random forest
+
+```{r}
+pred_rf_caida_sem <- predict(rf_caida_sem, newdata=datos_vl_caida_sem)
+mean((pred_rf_caida_sem- datos_vl_caida_sem$VR)^2)
+```
+
+## Resultado del bosque
+
+Veamos el error en función del número de árboles:
+
+```{r}
+plot(rf_caida_sem)
+```
+
+## Importancia de las variables
+
+```{r}
+varImpPlot(rf_caida_sem)
+```
+
+##Cálculo del MSE para el Modelo con Random Forest
+
+
+```{r}
+MSE_rf_caida_sem<- mean((datos_vl_caida_sem$VR-pred_rf_caida_sem)^2)
+MSE_rf_caida_sem
+```
+
+_____________________________________________________________________________
+Realizamos la modelación para el mes
+
+
+###CAIDA MES
+
+#Separamos los datos de accidentes por caída en entrenamiento y validación
+
+```{r}
+datos_tr_caida_mes<-subset(caida_mes,subset=(ANO<"2018"))
+datos_vl_caida_mes<-subset(caida_mes,subset=(ANO>="2018") & (ANO<"2019") )
+head(datos_vl_caida_mes)
+```
+#MODELO LINEAL (CAIDA_MES)
+ 
+```{r}
+ml_caida_mes<-lm(VR~MES + FESTIVO + FERIA_FLORES + SEMANA_SANTA ,data=datos_tr_caida_mes)
+summary(ml_caida_mes)
+```
+
+###Predicción Modelo Lineal
+
+```{r}
+pred_caida_mes<-predict(ml_caida_mes,newdata = datos_vl_caida_mes)
+pred_caida_mes
+```
+
+##Cálculo del MSE para el Modelo Lineal Mensual
+
+```{r}
+MSE_ml_caida_mes<- (1/nrow(datos_vl_caida_mes))*sum((datos_vl_caida_mes$VR- pred_caida_mes)^2)
+MSE_ml_caida_mes
+```
+
+_____________________________________________________________________________
+
+###Modelo Poisson para Caída (MENSUAL)
+
+#Ajuste del Modelo Poisson
+
+```{r}
+glm_caida_mes<-glm(VR~MES + FESTIVO + FERIA_FLORES + SEMANA_SANTA ,data=datos_tr_caida_mes,family = "poisson")
+summary(glm_caida_mes)
+```
+
+#Realizamos la predicción del modelo con los datos de validación
+
+```{r}
+pred_glm_caida_mes<-predict(glm_caida_mes,newdata = datos_vl_caida_mes)
+pred_glm_caida_mes
+```
+
+
+#Calculo del Pseudo $R^2$ para el Modelo Poisson:
+
+Obtengamos el (pseudo) $R^2$ para el modelo Poisson:
+```{r}
+
+y0_tr_caida_mes<-mean(datos_tr_caida_mes$VR)
+r0_tr_caida_mes<-datos_tr_caida_mes$VR-y0_tr_caida_mes
+R0_tr_caida_mes<-mean(r0_tr_caida_mes^2)
+y_pred_tr_glm_caida_mes<-predict(glm_caida_mes,type="response")
+r_tr_glm_caida_mes<-datos_tr_caida_mes$VR-y_pred_tr_glm_caida_mes
+R_tr_glm_caida_mes<-mean(r_tr_glm_caida_mes^2)
+R2_tr_glm_caida_mes<-1-R_tr_glm_caida_mes/R0_tr_caida_mes
+```
+
+#Veamos el resultado:
+```{r}
+print(R2_tr_glm_caida_mes)
+```
+
+##Cálculo del MSE para el Modelo Poisson Mensual
+
+
+```{r}
+MSE_glm_caida_mes<- (1/nrow(datos_vl_caida_mes))*sum((datos_vl_caida_mes$VR- pred_glm_caida_mes)^2)
+MSE_glm_caida_mes
+```
+
+_____________________________________________________________________________
+
+###Modelo Lasso para Caída Mensual
+
+#Entrenamiento
+
+
+```{r}
+  xtrain_caida_mes<-model.matrix(VR ~ MES + FESTIVO + FERIA_FLORES + 
+    SEMANA_SANTA,datos_tr_caida_mes)[,-4]
+  ytrain_caida_mes<-datos_tr_caida_mes$VR
+  lasso_caida_mes<-glmnet(xtrain_caida_mes,
+                    ytrain_caida_mes,
+                    standardize = TRUE,
+                    alpha=1,
+                    family = "poisson"
+                    )
+lasso_caida_mes
+```
+
+#Validación
+```{r}
+ x_val_caida_mes<-model.matrix(VR ~ MES + FESTIVO + FERIA_FLORES + 
+    SEMANA_SANTA,datos_vl_caida_mes)[,-4]
+  acc_vl_pred_caida_mes<-lasso_caida_mes %>% predict(newx = x_val_caida_mes,s=0,type="response")
+  acc_vl_pred_caida_mes<-as.vector(acc_vl_pred_caida_mes)
+  datos_vl_caida_mes<-mutate(datos_vl_caida_mes,acc_vl_pred_caida_mes)
+  datos_vl_caida_mes<-mutate(datos_vl_caida_mes,residual=VR - acc_vl_pred_caida_mes)
+
+```
+
+#rcuadrado sobre el mismo datatraining
+```{r}
+  r2_vl_caida_mes <- 1-( sum(datos_vl_caida_mes  $Residual^2) / sum((datos_vl_caida_mes$VR - mean(datos_vl_caida_mes$VR))^2) )
+  r2_vl_caida_mes
+```
+
+##Cálculo del MSE para el Modelo Lasso Mensual
+  
+```{r}
+MSE_lasso_caida_mes<- sum((datos_vl_caida_mes$residual)^2)/(nrow(datos_vl_caida_mes))
+MSE_lasso_caida_mes
+```
+
+_____________________________________________________________________________
+
+###Modelo de Bosques Aleatorios para Caídas Mensuales
+
+## Ajuste del bosque:
+
+```{r}
+rf_caida_mes<-randomForest(VR~MES + FESTIVO + FERIA_FLORES + SEMANA_SANTA,data=datos_tr_caida_mes ,importance=FALSE,ntree=500,mtry=2)
+rf_caida_mes
+```
+
+##predicción del random forest
+
+```{r}
+pred_rf_caida_mes <- predict(rf_caida_mes, newdata=datos_vl_caida_mes)
+mean((pred_rf_caida_mes- datos_vl_caida_mes$VR)^2)
+```
+
+## Resultado del bosque
+
+Veamos el error en función del número de árboles:
+
+```{r}
+plot(rf_caida_mes)
+```
+
+
+## Importancia de las variables
+
+```{r}
+varImpPlot(rf_caida_mes)
+```
+
+##Cálculo del MSE para el Modelo con Random Forest
+
+
+```{r}
+MSE_rf_caida_mes<- mean((datos_vl_caida_mes$VR-pred_rf_caida_mes)^2)
+MSE_rf_caida_mes
+```
+
+
+###FIN MODELACION PARA CAIDA###
+
+___________________________________________________________________________
+
+### OTRO
+
+#DIA
+
+```{r}
+otro_dia<-aggregate(VR~CLASE*DIA_NOMBRE*DIA*MES*SEMANA*ANO*FESTIVO*FERIA_FLORES*SEMANA_SANTA, data = data_accidentes, subset = data_accidentes$CLASE == "Otro", FUN = sum)
+head(otro_dia)
+```
+
+#SEMANA
+
+```{r}
+otro_semana<-aggregate(VR~CLASE*SEMANA*ANO*FESTIVO*FERIA_FLORES*SEMANA_SANTA, data = data_accidentes, subset = data_accidentes$CLASE == "Otro", FUN = sum)
+head(otro_semana)
+```
+
+#MES
+
+```{r}
+otro_mes<-aggregate(VR~CLASE*MES*ANO*FESTIVO*FERIA_FLORES*SEMANA_SANTA, data = data_accidentes, subset = data_accidentes$CLASE == "Otro", FUN = sum)
+head(otro_mes)
+```
+
+###Modelamiento
+
+###OTRO DIA
+
+#Separamos los datos de accidentes por otros motivos en entrenamiento y validación
+
+```{r}
+datos_tr_otro_dia<-subset(otro_dia,subset=(ANO<"2018"))
+datos_vl_otro_dia<-subset(otro_dia,subset=(ANO>="2018") & (ANO<"2019") )
+head(datos_vl_otro_dia)
+```
+
+#MODELO LINEAL (OTRO_DIA)
+ 
+```{r}
+lm_otro_dia<-lm(VR~DIA_NOMBRE + MES + FESTIVO + FERIA_FLORES + SEMANA_SANTA ,data=datos_tr_otro_dia)
+summary(lm_otro_dia)
+```
+
+###Predicción Modelo Lineal
+
+```{r}
+pred_otro_dia<-predict(lm_otro_dia,newdata = datos_vl_otro_dia)
+pred_otro_dia
+```
+
+##Cálculo del MSE para el Modelo Lineal Día
+
+```{r}
+MSE_lm_otro_dia<- (1/nrow(datos_vl_otro_dia))*sum((datos_vl_otro_dia$VR- pred_otro_dia)^2)
+MSE_lm_otro_dia
+```
+
+_____________________________________________________________________________
+
+###Modelo Poisson para Otros Motivos
+
+#Ajuste del Modelo Poisson
+
+```{r}
+glm_otro_dia<-glm(VR~DIA_NOMBRE + MES + FESTIVO + FERIA_FLORES + SEMANA_SANTA ,data=datos_tr_otro_dia,family = "poisson")
+summary(glm_otro_dia)
+```
+
+#Realizamos la predicción del modelo con los datos de validación
+
+```{r}
+pred_glm_otro_dia<-predict(glm_otro_dia,newdata = datos_vl_otro_dia)
+pred_glm_otro_dia
+```
+
+#Calculo del Pseudo $R^2$ para el Modelo Poisson:
+
+Obtengamos el (pseudo) $R^2$ para el modelo Poisson:
+```{r}
+
+y0_tr_otro_dia<-mean(datos_tr_otro_dia$VR)
+r0_tr_otro_dia<-datos_tr_otro_dia$VR-y0_tr_otro_dia
+R0_tr_otro_dia<-mean(r0_tr_otro_dia^2)
+y_pred_tr_glm_otro_dia<-predict(glm_otro_dia,type="response")
+r_tr_glm_otro_dia<-datos_tr_otro_dia$VR-y_pred_tr_glm_otro_dia
+R_tr_glm_otro_dia<-mean(r_tr_glm_otro_dia^2)
+R2_tr_glm_otro_dia<-1-R_tr_glm_otro_dia/R0_tr_otro_dia
+```
+
+#Veamos el resultado:
+```{r}
+print(R2_tr_glm_otro_dia)
+```
+
+
+##Cálculo del MSE para el Modelo Poisson Día
+
+
+```{r}
+MSE_glm_otro_dia<- (1/nrow(datos_vl_otro_dia))*sum((datos_vl_otro_dia$VR- pred_glm_otro_dia)^2)
+MSE_glm_otro_dia
+```
+
+_____________________________________________________________________________
+
+###Modelo Lasso para Otros Motivos
+
+#Entrenamiento
+
+
+```{r}
+  xtrain_otro_dia<-model.matrix(VR ~ DIA_NOMBRE + MES + FESTIVO + FERIA_FLORES + SEMANA_SANTA,datos_tr_otro_dia)[,-4]
+  ytrain_otro_dia<-datos_tr_otro_dia$VR
+  lasso_otro_dia<-glmnet(xtrain_otro_dia,
+                    ytrain_otro_dia,
+                    standardize = FALSE,
+                    alpha=1,
+                    family = "poisson"
+                    )
+lasso_otro_dia
+```
+
+#Validación
+```{r}
+ x_val_otro_dia<-model.matrix(VR ~ DIA_NOMBRE + MES + FESTIVO + FERIA_FLORES + SEMANA_SANTA,datos_vl_otro_dia)[,-4]
+ otro_vl_dia<-lasso_otro_dia %>% predict(newx = x_val_otro_dia,s=0,type="response")
+  otro_vl_dia<-as.vector(otro_vl_dia)
+  datos_vl_otro_dia<-mutate(datos_vl_otro_dia,otro_vl_dia)
+  datos_vl_otro_dia<-mutate(datos_vl_otro_dia,residual=VR - otro_vl_dia)
+
+```
+
+#rcuadrado sobre el mismo datatraining
+```{r}
+  r2_vl_otro_dia <- 1-( sum(datos_vl_otro_dia$Residual^2) / sum((datos_vl_otro_dia$VR - mean(datos_vl_otro_dia$VR))^2) )
+  r2_vl_otro_dia
+```
+
+##Cálculo del MSE para el Modelo Lasso Día
+  
+```{r}
+MSE_lasso_otro_dia<- sum((datos_vl_otro_dia$residual)^2)/(nrow(datos_vl_otro_dia))
+MSE_lasso_otro_dia
+```
+
+_____________________________________________________________________________
+
+###Modelo de Bosques Aleatorios para Caída
+
+## Ajuste del bosque:
+
+```{r}
+rf_otro_dia<-randomForest(VR~DIA_NOMBRE + MES + FESTIVO + FERIA_FLORES + SEMANA_SANTA,data=datos_tr_otro_dia ,importance=FALSE,ntree=500,mtry=2)
+rf_otro_dia
+```
+
+##predicción del random forest
+
+```{r}
+pred_rf_otro_dia <- predict(rf_otro_dia, newdata=datos_vl_otro_dia )
+mean((pred_rf_otro_dia- datos_vl_otro_dia$VR)^2)
+```
+
+## Resultado del bosque
+
+Veamos el error en función del número de árboles:
+
+```{r}
+plot(rf_otro_dia)
+```
+
+## Importancia de las variables
+
+```{r}
+varImpPlot(rf_otro_dia)
+```
+
+##Cálculo del MSE para el Modelo con Random Forest
+
+
+```{r}
+MSE_rf_otro_dia<- mean((datos_vl_otro_dia$VR-pred_rf_otro_dia)^2)
+MSE_rf_otro_dia
+```
+
+_____________________________________________________________________________
+Realizamos la modelación para Semana
+
+
+###OTRO SEMANA
+
+#Separamos los datos de accidentes por Otros Motivos en entrenamiento y validación
+
+```{r}
+datos_tr_otro_sem<-subset(otro_semana,subset=(ANO<"2018"))
+datos_vl_otro_sem<-subset(otro_semana,subset=(ANO>="2018") & (ANO<"2019") )
+head(datos_vl_otro_sem)
+```
+
+#MODELO LINEAL (OTRO_SEMANA)
+
+```{r}
+ml_otro_semana<-lm(VR~SEMANA + FESTIVO + FERIA_FLORES + SEMANA_SANTA ,data=datos_tr_otro_sem)
+summary(ml_otro_semana)
+```
+
+
+###Predicción Modelo Lineal
+
+```{r}
+pred_otro_sem<-predict(ml_otro_semana,newdata = datos_vl_otro_sem)
+pred_otro_sem
+```
+
+##Cálculo del MSE para el Modelo Lineal Semana
+
+```{r}
+MSE_ml_otro_sem<- (1/nrow(datos_vl_otro_sem))*sum((datos_vl_otro_sem$VR- pred_otro_sem)^2)
+MSE_ml_otro_sem
+```
+
+_____________________________________________________________________________
+
+###Modelo Poisson para Otros Motivos (SEMANA)
+
+#Ajuste del Modelo Poisson
+
+```{r}
+glm_otro_sem<-glm(VR~SEMANA + ANO + FESTIVO + FERIA_FLORES + SEMANA_SANTA ,data=datos_tr_otro_sem,family = "poisson")
+summary(glm_otro_sem)
+```
+
+#Realizamos la predicción del modelo con los datos de validación
+
+```{r}
+pred_glm_otro_sem<-predict(glm_otro_sem,newdata = datos_vl_otro_sem)
+pred_glm_otro_sem
+```
+
+#Calculo del Pseudo $R^2$ para el Modelo Poisson:
+
+Obtengamos el (pseudo) $R^2$ para el modelo Poisson:
+```{r}
+
+y0_tr_otro_sem<-mean(datos_tr_otro_sem$VR)
+r0_tr_otro_sem<-datos_tr_otro_sem$VR-y0_tr_otro_sem
+R0_tr_otro_sem<-mean(r0_tr_otro_sem^2)
+y_pred_tr_glm_otro_sem<-predict(glm_otro_sem,type="response")
+r_tr_glm_otro_sem<-datos_tr_otro_sem$VR-y_pred_tr_glm_otro_sem
+R_tr_glm_otro_sem<-mean(r_tr_glm_otro_sem^2)
+R2_tr_glm_otro_sem<-1-R_tr_glm_otro_sem/R0_tr_otro_sem
+```
+
+#Veamos el resultado:
+```{r}
+print(R2_tr_glm_otro_sem)
+```
+
+
+
+##Cálculo del MSE para el Modelo Poisson Semana
+
+
+```{r}
+MSE_glm_otro_sem<- (1/nrow(datos_vl_otro_sem))*sum((datos_vl_otro_sem$VR- pred_glm_otro_sem)^2)
+MSE_glm_otro_sem
+```
+
+_____________________________________________________________________________
+
+###Modelo Lasso para otro
+
+#Entrenamiento
+
+
+```{r}
+  xtrain_otro_sem<-model.matrix(VR ~ SEMANA + FESTIVO + FERIA_FLORES + 
+    SEMANA_SANTA,datos_tr_otro_sem)[,-4]
+  ytrain_otro_sem<-datos_tr_otro_sem$VR
+ lasso_otro_sem<-glmnet(xtrain_otro_sem,
+                    ytrain_otro_sem,
+                    standardize = TRUE,
+                    alpha=1,
+                    family = "poisson"
+                    )
+lasso_otro_sem
+```
+
+#Validación
+```{r}
+ x_val_otro_sem<-model.matrix(VR ~ SEMANA + FESTIVO + FERIA_FLORES + 
+    SEMANA_SANTA,datos_vl_otro_sem)[,-4]
+  acc_vl_pred_otro_sem<-lasso_otro_sem %>% predict(newx = x_val_otro_sem,s=0,type="response")
+  acc_vl_pred_otro_sem<-as.vector(acc_vl_pred_otro_sem)
+  datos_vl_otro_sem<-mutate(datos_vl_otro_sem,acc_vl_pred_otro_sem)
+  datos_vl_otro_sem<-mutate(datos_vl_otro_sem,residual=VR - acc_vl_pred_otro_sem)
+
+```
+
+#rcuadrado sobre el mismo datatraining
+```{r}
+  r2_vl_sem_otro <- 1-( sum(datos_vl_otro_sem  $Residual^2) / sum((datos_vl_otro_sem$VR - mean(datos_vl_otro_sem$VR))^2) )
+  r2_vl_sem_otro
+```
+
+##Cálculo del MSE para el Modelo Lasso Semanal
+  
+```{r}
+MSE_lasso_otro_sem<- sum((datos_vl_otro_sem$residual)^2)/(nrow(datos_vl_otro_sem))
+MSE_lasso_otro_sem
+```
+
+_____________________________________________________________________________
+
+###Modelo de Bosques Aleatorios para Otros Motivos
+
+## Ajuste del bosque:
+
+```{r}
+rf_otro_sem<-randomForest(VR~SEMANA + FESTIVO + FERIA_FLORES + SEMANA_SANTA,data=datos_tr_otro_sem ,importance=FALSE,ntree=500,mtry=2)
+rf_otro_sem
+```
+
+##predicción del random forest
+
+```{r}
+pred_rf_otro_sem <- predict(rf_otro_sem, newdata=datos_vl_otro_sem)
+mean((pred_rf_otro_sem- datos_vl_otro_sem$VR)^2)
+```
+
+## Resultado del bosque
+
+Veamos el error en función del número de árboles:
+
+```{r}
+plot(rf_otro_sem)
+```
+
+## Importancia de las variables
+
+```{r}
+varImpPlot(rf_otro_sem)
+```
+
+##Cálculo del MSE para el Modelo con Random Forest
+
+
+```{r}
+MSE_rf_otro_sem<- mean((datos_vl_otro_sem$VR-pred_rf_otro_sem)^2)
+MSE_rf_otro_sem
+```
+
+_____________________________________________________________________________
+Realizamos la modelación para el mes
+
+
+###OTRO MES
+
+#Separamos los datos de accidentes por Otros Motivos en entrenamiento y validación
+
+```{r}
+datos_tr_otro_mes<-subset(otro_mes,subset=(ANO<"2018"))
+datos_vl_otro_mes<-subset(otro_mes,subset=(ANO>="2018") & (ANO<"2019") )
+head(datos_vl_otro_mes)
+```
+#MODELO LINEAL (OTRO_MES)
+ 
+```{r}
+ml_otro_mes<-lm(VR~MES + FESTIVO + FERIA_FLORES + SEMANA_SANTA ,data=datos_tr_otro_mes)
+summary(ml_otro_mes)
+```
+
+###Predicción Modelo Lineal
+
+```{r}
+pred_otro_mes<-predict(ml_otro_mes,newdata = datos_vl_otro_mes)
+pred_otro_mes
+```
+
+##Cálculo del MSE para el Modelo Lineal Mensual
+
+```{r}
+MSE_ml_otro_mes<- (1/nrow(datos_vl_otro_mes))*sum((datos_vl_otro_mes$VR- pred_otro_mes)^2)
+MSE_ml_otro_mes
+```
+
+_____________________________________________________________________________
+
+###Modelo Poisson para Otros Motivos (MENSUAL)
+
+#Ajuste del Modelo Poisson
+
+```{r}
+glm_otro_mes<-glm(VR~MES + FESTIVO + FERIA_FLORES + SEMANA_SANTA ,data=datos_tr_otro_mes,family = "poisson")
+summary(glm_otro_mes)
+```
+
+#Realizamos la predicción del modelo con los datos de validación
+
+```{r}
+pred_glm_otro_mes<-predict(glm_otro_mes,newdata = datos_vl_otro_mes)
+pred_glm_otro_mes
+```
+
+
+#Calculo del Pseudo $R^2$ para el Modelo Poisson:
+
+Obtengamos el (pseudo) $R^2$ para el modelo Poisson:
+```{r}
+
+y0_tr_otro_mes<-mean(datos_tr_otro_mes$VR)
+r0_tr_otro_mes<-datos_tr_otro_mes$VR-y0_tr_otro_mes
+R0_tr_otro_mes<-mean(r0_tr_otro_mes^2)
+y_pred_tr_glm_otro_mes<-predict(glm_otro_mes,type="response")
+r_tr_glm_otro_mes<-datos_tr_otro_mes$VR-y_pred_tr_glm_otro_mes
+R_tr_glm_otro_mes<-mean(r_tr_glm_otro_mes^2)
+R2_tr_glm_otro_mes<-1-R_tr_glm_otro_mes/R0_tr_otro_mes
+```
+
+#Veamos el resultado:
+```{r}
+print(R2_tr_glm_otro_mes)
+```
+
+##Cálculo del MSE para el Modelo Poisson Mensual
+
+
+```{r}
+MSE_glm_otro_mes<- (1/nrow(datos_vl_otro_mes))*sum((datos_vl_otro_mes$VR- pred_glm_otro_mes)^2)
+MSE_glm_otro_mes
+```
+
+_____________________________________________________________________________
+
+###Modelo Lasso para Otros Motivos Mensual
+
+#Entrenamiento
+
+
+```{r}
+  xtrain_otro_mes<-model.matrix(VR ~ MES + FESTIVO + FERIA_FLORES + 
+    SEMANA_SANTA,datos_tr_otro_mes)[,-4]
+  ytrain_otro_mes<-datos_tr_otro_mes$VR
+  lasso_otro_mes<-glmnet(xtrain_otro_mes,
+                    ytrain_otro_mes,
+                    standardize = TRUE,
+                    alpha=1,
+                    family = "poisson"
+                    )
+lasso_otro_mes
+```
+
+#Validación
+```{r}
+ x_val_otro_mes<-model.matrix(VR ~ MES + FESTIVO + FERIA_FLORES + 
+    SEMANA_SANTA,datos_vl_otro_mes)[,-4]
+  acc_vl_pred_otro_mes<-lasso_otro_mes %>% predict(newx = x_val_otro_mes,s=0,type="response")
+  acc_vl_pred_otro_mes<-as.vector(acc_vl_pred_otro_mes)
+  datos_vl_otro_mes<-mutate(datos_vl_otro_mes,acc_vl_pred_otro_mes)
+  datos_vl_otro_mes<-mutate(datos_vl_otro_mes,residual=VR - acc_vl_pred_otro_mes)
+
+```
+
+#rcuadrado sobre el mismo datatraining
+```{r}
+  r2_vl_otro_mes <- 1-( sum(datos_vl_otro_mes  $Residual^2) / sum((datos_vl_otro_mes$VR - mean(datos_vl_otro_mes$VR))^2) )
+  r2_vl_otro_mes
+```
+
+##Cálculo del MSE para el Modelo Lasso Mensual
+  
+```{r}
+MSE_lasso_otro_mes<- sum((datos_vl_otro_mes$residual)^2)/(nrow(datos_vl_otro_mes))
+MSE_lasso_otro_mes
+```
+
+_____________________________________________________________________________
+
+###Modelo de Bosques Aleatorios para Otros Motivos Mensuales
+
+## Ajuste del bosque:
+
+```{r}
+rf_otro_mes<-randomForest(VR~MES + FESTIVO + FERIA_FLORES + SEMANA_SANTA,data=datos_tr_otro_mes ,importance=FALSE,ntree=500,mtry=2)
+rf_otro_mes
+```
+
+##predicción del random forest
+
+```{r}
+pred_rf_otro_mes <- predict(rf_otro_mes, newdata=datos_vl_otro_mes)
+mean((pred_rf_otro_mes- datos_vl_otro_mes$VR)^2)
+```
+
+## Resultado del bosque
+
+Veamos el error en función del número de árboles:
+
+```{r}
+plot(rf_otro_mes)
+```
+
+
+## Importancia de las variables
+
+```{r}
+varImpPlot(rf_otro_mes)
+```
+
+##Cálculo del MSE para el Modelo con Random Forest
+
+
+```{r}
+MSE_rf_otro_mes<- mean((datos_vl_otro_mes$VR-pred_rf_otro_mes)^2)
+MSE_rf_otro_mes
+```
+
+
+###FIN MODELACION PARA OTROs MOTIVOS###
+
+___________________________________________________________________________
+
+####CREACION DE TABLAS AGREGADAS PARA LOS DATOS HISTORICOS
+
+###Cargamos y visualizamos la data para choque
+```{r}
+bd_choque_dia<-read.csv("C:/Users/sebastian.elorzav/Desktop/Info SE/Sebas E/U. Nacional/2019-I/3.Analítica Predictiva/Trabajo/BD Prediccion/bd_choque_dia.csv", ";", header = T, na.strings = "?")
+head(bd_choque_dia)
+```
+
+
+```{r}
+bd_choque_dia$MES<-as.factor(bd_choque_dia$MES)
+bd_choque_dia$SEMANA<-as.factor(bd_choque_dia$SEMANA)
+head(bd_choque_dia)
+```
+
+##predicción del random forest para 2019 y 2020
+
+```{r}
+pred_rf_choque_dia_2019 <- predict(modelo_rf_choque_dia, newdata=bd_choque_dia )
+pred_rf_choque_dia_2019
+```
+
+
+#### Creación de Dataframe para choques por día
+
+```{r}
+choque_dia_2014<-data.frame(Clase=choque_dia$CLASE, Dia=choque_dia$DIA, Mes=choque_dia$MES, Ano=choque_dia$ANO, Accidentes=choque_dia$VR)
+head(choque_dia_2014)
+```
+
+```{r}
+choque_dia_2019<-data.frame(Clase=bd_choque_dia$CLASE, Dia=bd_choque_dia$DIA, Mes=bd_choque_dia$MES, Ano=bd_choque_dia$ANO, Accidentes=pred_rf_choque_dia_2019)
+head(choque_dia_2019)
+```
+
+```{r}
+choque_final_dia<-rbind(choque_dia_2014,choque_dia_2019)
+head(choque_final_dia)
+```
+
+_________________________________________________________________________
+
+###Cargamos y visualizamos la data para atropello
+```{r}
+bd_atropello_dia<-read.csv("C:/Users/sebastian.elorzav/Desktop/Info SE/Sebas E/U. Nacional/2019-I/3.Analítica Predictiva/Trabajo/BD Prediccion/bd_atropello_dia.csv", ";", header = T, na.strings = "?")
+head(bd_atropello_dia)
+```
+
+```{r}
+bd_atropello_dia$MES<-as.factor(bd_atropello_dia$MES)
+bd_atropello_dia$SEMANA<-as.factor(bd_atropello_dia$SEMANA)
+head(bd_atropello_dia)
+```
+
+##predicción del random forest para 2019 y 2020
+
+```{r}
+pred_rf_atropello_dia_2019 <- predict(rf_atropello_dia, newdata=bd_atropello_dia )
+pred_rf_atropello_dia_2019
+```
+
+
+#### Creación de Dataframe para atropellos por día
+
+```{r}
+atropello_dia_2014<-data.frame(Clase=atropello_dia$CLASE, Dia=atropello_dia$DIA, Mes=atropello_dia$MES, Ano=atropello_dia$ANO, Accidentes=atropello_dia$VR)
+head(atropello_dia_2014)
+```
+
+```{r}
+atropello_dia_2019<-data.frame(Clase=bd_atropello_dia$CLASE, Dia=bd_atropello_dia$DIA, Mes=bd_atropello_dia$MES, Ano=bd_atropello_dia$ANO, Accidentes=pred_rf_atropello_dia_2019)
+head(atropello_dia_2019)
+```
+
+```{r}
+atropello_final_dia<-rbind(atropello_dia_2014,atropello_dia_2019)
+head(atropello_final_dia)
+```
+
+
+
+_________________________________________________________________________
+
+###Cargamos y visualizamos la data para caida
+```{r}
+bd_caida_dia<-read.csv("C:/Users/sebastian.elorzav/Desktop/Info SE/Sebas E/U. Nacional/2019-I/3.Analítica Predictiva/Trabajo/BD Prediccion/bd_caida_dia.csv", ";", header = T, na.strings = "?")
+head(bd_caida_dia)
+```
+
+```{r}
+bd_caida_dia$MES<-as.factor(bd_caida_dia$MES)
+bd_caida_dia$SEMANA<-as.factor(bd_caida_dia$SEMANA)
+head(bd_caida_dia)
+```
+
+##predicción del random forest para 2019 y 2020
+
+```{r}
+pred_rf_caida_dia_2019 <- predict(rf_caida_dia, newdata=bd_caida_dia )
+pred_rf_caida_dia_2019
+```
+
+
+#### Creación de Dataframe para caidas por día
+
+```{r}
+caida_dia_2014<-data.frame(Clase=caida_dia$CLASE, Dia=caida_dia$DIA, Mes=caida_dia$MES, Ano=caida_dia$ANO, Accidentes=caida_dia$VR)
+head(caida_dia_2014)
+```
+
+```{r}
+caida_dia_2019<-data.frame(Clase=bd_caida_dia$CLASE, Dia=bd_caida_dia$DIA, Mes=bd_caida_dia$MES, Ano=bd_caida_dia$ANO, Accidentes=pred_rf_caida_dia_2019)
+head(caida_dia_2019)
+```
+
+```{r}
+caida_final_dia<-rbind(caida_dia_2014,caida_dia_2019)
+head(caida_final_dia)
+```
+
+_________________________________________________________________________
+
+###Cargamos y visualizamos la data para otro
+```{r}
+bd_otro_dia<-read.csv("C:/Users/sebastian.elorzav/Desktop/Info SE/Sebas E/U. Nacional/2019-I/3.Analítica Predictiva/Trabajo/BD Prediccion/bd_otro_dia.csv", ";", header = T, na.strings = "?")
+head(bd_otro_dia)
+```
+
+```{r}
+bd_otro_dia$MES<-as.factor(bd_otro_dia$MES)
+bd_otro_dia$SEMANA<-as.factor(bd_otro_dia$SEMANA)
+head(bd_otro_dia)
+```
+
+##predicción del random forest para 2019 y 2020
+
+```{r}
+pred_rf_otro_dia_2019 <- predict(rf_otro_dia, newdata=bd_otro_dia )
+pred_rf_otro_dia_2019
+```
+
+
+#### Creación de Dataframe para otros por día
+
+```{r}
+otro_dia_2014<-data.frame(Clase=otro_dia$CLASE, Dia=otro_dia$DIA, Mes=otro_dia$MES, Ano=otro_dia$ANO, Accidentes=otro_dia$VR)
+head(otro_dia_2014)
+```
+
+```{r}
+otro_dia_2019<-data.frame(Clase=bd_otro_dia$CLASE, Dia=bd_otro_dia$DIA, Mes=bd_otro_dia$MES, Ano=bd_otro_dia$ANO, Accidentes=pred_rf_otro_dia_2019)
+head(otro_dia_2019)
+```
+
+```{r}
+otro_final_dia<-rbind(otro_dia_2014,otro_dia_2019)
+head(otro_final_dia)
+```
+
+```{r}
+tb_dia<-rbind(choque_final_dia,atropello_final_dia,caida_final_dia,otro_final_dia)
+head(tb_dia)
+```
+
+___________________________________________________________________________
+
+####CREACION DE TABLAS AGREGADAS PARA LOS DATOS HISTORICOS SEMANA
+
+###Cargamos y visualizamos la data para choque
+
+```{r}
+bd_choque_semana <- aggregate(VR~ CLASE * SEMANA*ANO*FESTIVO*FERIA_FLORES*SEMANA_SANTA,data = bd_choque_dia,FUN = mean)
+head(bd_choque_semana)
+```
+
+
+```{r}
+bd_choque_semana$SEMANA<-as.factor(bd_choque_semana$SEMANA)
+head(bd_choque_semana)
+```
+
+##predicción del random forest para 2019 y 2020
+
+```{r}
+pred_rf_choque_semana_2019 <- predict(modelo_rf_choque_sem, newdata=bd_choque_semana )
+pred_rf_choque_semana_2019
+```
+
+
+#### Creación de Dataframe para choques por semana
+
+```{r}
+choque_semana_2014<-data.frame(Clase=choque_semana$CLASE, semana=choque_semana$SEMANA, Ano=choque_semana$ANO, Accidentes=choque_semana$VR)
+head(choque_semana_2014)
+```
+
+```{r}
+choque_semana_2019<-data.frame(Clase=bd_choque_semana$CLASE, semana=bd_choque_semana$SEMANA, Ano=bd_choque_semana$ANO, Accidentes=pred_rf_choque_semana_2019)
+head(choque_semana_2019)
+```
+
+```{r}
+choque_final_semana<-rbind(choque_semana_2014,choque_semana_2019)
+head(choque_final_semana)
+```
+
+_________________________________________________________________________
+
+###Cargamos y visualizamos la data para atropello
+```{r}
+bd_atropello_semana<-read.csv("C:/Users/sebastian.elorzav/Desktop/Info SE/Sebas E/U. Nacional/2019-I/3.Analítica Predictiva/Trabajo/BD Prediccion/bd_atropello_semana.csv", ";", header = T, na.strings = "?")
+head(bd_atropello_semana)
+```
+
+```{r}
+bd_atropello_semana$SEMANA<-as.factor(bd_atropello_semana$SEMANA)
+head(bd_atropello_semana)
+```
+
+##predicción del random forest para 2019 y 2020
+
+```{r}
+pred_rf_atropello_semana_2019 <- predict(rf_atropello_sem, newdata=bd_atropello_semana )
+pred_rf_atropello_semana_2019
+```
+
+
+#### Creación de Dataframe para atropellos por día
+
+```{r}
+atropello_semana_2014<-data.frame(Clase=atropello_semana$CLASE, semana=atropello_semana$SEMANA, Ano=atropello_semana$ANO, Accidentes=atropello_semana$VR)
+head(atropello_semana_2014)
+```
+
+```{r}
+atropello_semana_2019<-data.frame(Clase=bd_atropello_semana$CLASE, semana=bd_atropello_semana$SEMANA, Ano=bd_atropello_semana$ANO, Accidentes=pred_rf_atropello_semana_2019)
+head(atropello_semana_2019)
+```
+
+```{r}
+atropello_final_semana<-rbind(atropello_semana_2014,atropello_semana_2019)
+head(atropello_final_semana)
+```
+
+_________________________________________________________________________
+
+###Cargamos y visualizamos la data para caida
+```{r}
+bd_caida_semana<-read.csv("C:/Users/sebastian.elorzav/Desktop/Info SE/Sebas E/U. Nacional/2019-I/3.Analítica Predictiva/Trabajo/BD Prediccion/bd_caida_semana.csv", ";", header = T, na.strings = "?")
+head(bd_caida_semana)
+```
+
+```{r}
+bd_caida_semana$SEMANA<-as.factor(bd_caida_semana$SEMANA)
+head(bd_caida_semana)
+```
+
+##predicción del random forest para 2019 y 2020
+
+```{r}
+pred_rf_caida_semana_2019 <- predict(rf_caida_sem, newdata=bd_caida_semana )
+pred_rf_caida_semana_2019
+```
+
+
+#### Creación de Dataframe para caidas por día
+
+```{r}
+caida_semana_2014<-data.frame(Clase=caida_semana$CLASE, semana=caida_semana$SEMANA, Ano=caida_semana$ANO, Accidentes=caida_semana$VR)
+head(caida_semana_2014)
+```
+
+```{r}
+caida_semana_2019<-data.frame(Clase=bd_caida_semana$CLASE, semana=bd_caida_semana$SEMANA, Ano=bd_caida_semana$ANO, Accidentes=pred_rf_caida_semana_2019)
+head(caida_semana_2019)
+```
+
+```{r}
+caida_final_semana<-rbind(caida_semana_2014,caida_semana_2019)
+head(caida_final_semana)
+```
+_________________________________________________________________________
+
+###Cargamos y visualizamos la data para otro
+```{r}
+bd_otro_semana<-read.csv("C:/Users/sebastian.elorzav/Desktop/Info SE/Sebas E/U. Nacional/2019-I/3.Analítica Predictiva/Trabajo/BD Prediccion/bd_otro_semana.csv", ";", header = T, na.strings = "?")
+head(bd_otro_semana)
+```
+
+```{r}
+bd_otro_semana$SEMANA<-as.factor(bd_otro_semana$SEMANA)
+head(bd_otro_semana)
+```
+
+##predicción del random forest para 2019 y 2020
+
+```{r}
+pred_rf_otro_semana_2019 <- predict(rf_otro_sem, newdata=bd_otro_semana )
+pred_rf_otro_semana_2019
+```
+
+
+#### Creación de Dataframe para otros por día
+
+```{r}
+otro_semana_2014<-data.frame(Clase=otro_semana$CLASE, semana=otro_semana$SEMANA, Ano=otro_semana$ANO, Accidentes=otro_semana$VR)
+head(otro_semana_2014)
+```
+
+```{r}
+otro_semana_2019<-data.frame(Clase=bd_otro_semana$CLASE, semana=bd_otro_semana$SEMANA, Ano=bd_otro_semana$ANO, Accidentes=pred_rf_otro_semana_2019)
+head(otro_semana_2019)
+```
+
+```{r}
+otro_final_semana<-rbind(otro_semana_2014,otro_semana_2019)
+head(otro_final_semana)
+```
+
+```{r}
+tb_semana<-rbind(choque_final_semana,atropello_final_semana,caida_final_semana
+,otro_final_semana)
+head(tb_semana)
+```
+
+
+___________________________________________________________________________
+
+####CREACION DE TABLAS AGREGADAS PARA LOS DATOS HISTORICOS MES
+
+###Cargamos y visualizamos la data para choque
+
+```{r}
+bd_choque_mes <- aggregate(VR~ CLASE * MES*ANO*FESTIVO*FERIA_FLORES*SEMANA_SANTA,data = bd_choque_dia,FUN = mean)
+head(bd_choque_mes)
+```
+
+
+```{r}
+bd_choque_mes$MES<-as.factor(bd_choque_mes$MES)
+head(bd_choque_mes)
+```
+
+##predicción del random forest para 2019 y 2020
+
+```{r}
+pred_rf_choque_mes_2019 <- predict(modelo_rf_choque_mes, newdata=bd_choque_mes )
+pred_rf_choque_mes_2019
+```
+
+
+#### Creación de Dataframe para choques por mes
+
+```{r}
+choque_mes_2014<-data.frame(Clase=choque_mes$CLASE, mes=choque_mes$MES, Ano=choque_mes$ANO, Accidentes=choque_mes$VR)
+head(choque_mes_2014)
+```
+
+```{r}
+choque_mes_2019<-data.frame(Clase=bd_choque_mes$CLASE, mes=bd_choque_mes$MES, Ano=bd_choque_mes$ANO, Accidentes=pred_rf_choque_mes_2019)
+head(choque_mes_2019)
+```
+
+```{r}
+choque_final_mes<-rbind(choque_mes_2014,choque_mes_2019)
+head(choque_final_mes)
+```
+
+
+______________________________________________________________________________
+
+
+###Cargamos y visualizamos la data para atropello
+
+```{r}
+bd_atropello_mes <- aggregate(VR~ CLASE * MES*ANO*FESTIVO*FERIA_FLORES*SEMANA_SANTA,data = bd_atropello_dia,FUN = mean)
+head(bd_atropello_mes)
+```
+
+
+```{r}
+bd_atropello_mes$MES<-as.factor(bd_atropello_mes$MES)
+head(bd_atropello_mes)
+```
+
+##predicción del random forest para 2019 y 2020
+
+```{r}
+pred_rf_atropello_mes_2019 <- predict(rf_atropello_mes, newdata=bd_atropello_mes )
+pred_rf_atropello_mes_2019
+```
+
+
+#### Creación de Dataframe para atropellos por mes
+
+```{r}
+atropello_mes_2014<-data.frame(Clase=atropello_mes$CLASE, mes=atropello_mes$MES, Ano=atropello_mes$ANO, Accidentes=atropello_mes$VR)
+head(atropello_mes_2014)
+```
+
+```{r}
+atropello_mes_2019<-data.frame(Clase=bd_atropello_mes$CLASE, mes=bd_atropello_mes$MES, Ano=bd_atropello_mes$ANO, Accidentes=pred_rf_atropello_mes_2019)
+head(atropello_mes_2019)
+```
+
+```{r}
+atropello_final_mes<-rbind(atropello_mes_2014,atropello_mes_2019)
+head(atropello_final_mes)
+```
+
+______________________________________________________________________________
+
+
+###Cargamos y visualizamos la data para caida
+
+```{r}
+bd_caida_mes <- aggregate(VR~ CLASE * MES*ANO*FESTIVO*FERIA_FLORES*SEMANA_SANTA,data = bd_caida_dia,FUN = mean)
+head(bd_caida_mes)
+```
+
+
+```{r}
+bd_caida_mes$MES<-as.factor(bd_caida_mes$MES)
+head(bd_caida_mes)
+```
+
+##predicción del random forest para 2019 y 2020
+
+```{r}
+pred_rf_caida_mes_2019 <- predict(rf_caida_mes, newdata=bd_caida_mes )
+pred_rf_caida_mes_2019
+```
+
+
+#### Creación de Dataframe para caida por mes
+
+```{r}
+caida_mes_2014<-data.frame(Clase=caida_mes$CLASE, mes=caida_mes$MES, Ano=caida_mes$ANO, Accidentes=caida_mes$VR)
+head(caida_mes_2014)
+```
+
+```{r}
+caida_mes_2019<-data.frame(Clase=bd_caida_mes$CLASE, mes=bd_caida_mes$MES, Ano=bd_caida_mes$ANO, Accidentes=pred_rf_caida_mes_2019)
+head(caida_mes_2019)
+```
+
+```{r}
+caida_final_mes<-rbind(caida_mes_2014,caida_mes_2019)
+head(caida_final_mes)
+```
+
+______________________________________________________________________________
+
+
+###Cargamos y visualizamos la data para otro
+
+```{r}
+bd_otro_mes <- aggregate(VR~ CLASE * MES*ANO*FESTIVO*FERIA_FLORES*SEMANA_SANTA,data = bd_otro_dia,FUN = mean)
+head(bd_otro_mes)
+```
+
+
+```{r}
+bd_otro_mes$MES<-as.factor(bd_otro_mes$MES)
+head(bd_otro_mes)
+```
+
+##predicción del random forest para 2019 y 2020
+
+```{r}
+pred_rf_otro_mes_2019 <- predict(rf_otro_mes, newdata=bd_otro_mes )
+pred_rf_otro_mes_2019
+```
+
+
+#### Creación de Dataframe para caida por mes
+
+```{r}
+otro_mes_2014<-data.frame(Clase=otro_mes$CLASE, mes=otro_mes$MES, Ano=otro_mes$ANO, Accidentes=otro_mes$VR)
+head(otro_mes_2014)
+```
+
+```{r}
+otro_mes_2019<-data.frame(Clase=bd_otro_mes$CLASE, mes=bd_otro_mes$MES, Ano=bd_otro_mes$ANO, Accidentes=pred_rf_otro_mes_2019)
+head(otro_mes_2019)
+```
+
+```{r}
+otro_final_mes<-rbind(otro_mes_2014,otro_mes_2019)
+head(otro_final_mes)
+```
+
+
+
+
+```{r}
+tb_mes<-rbind(choque_final_mes,atropello_final_mes,caida_final_mes
+,otro_final_mes)
+head(tb_mes)
+```
+
+
+```{r}
+write.csv(tb_dia,"C:/Users/sebastian.elorzav/Desktop/Info SE/Sebas E/U. Nacional/2019-I/3.Analítica Predictiva/Trabajo/BD Final/tb_dia.csv",row.names = FALSE)
+```
+
+```{r}
+write.csv(tb_mes,"C:/Users/sebastian.elorzav/Desktop/Info SE/Sebas E/U. Nacional/2019-I/3.Analítica Predictiva/Trabajo/BD Final/tb_mes.csv", row.names = FALSE)
+```
+
+```{r}
+write.csv(tb_semana,"C:/Users/sebastian.elorzav/Desktop/Info SE/Sebas E/U. Nacional/2019-I/3.Analítica Predictiva/Trabajo/BD Final/tb_semana.csv", row.names = FALSE)
+```
+
+
+
+
+
+
+
+
